@@ -1,0 +1,102 @@
+
+REPORT zpr_create_request.
+
+PARAMETERS:
+  p_reqid TYPE char10 OBLIGATORY,
+  p_matnr TYPE matnr OBLIGATORY,
+  p_werks TYPE werks_d OBLIGATORY,
+  p_qty   TYPE menge_d OBLIGATORY,
+  p_unit  TYPE meins OBLIGATORY,
+  p_price TYPE p LENGTH 13 DECIMALS 2 OBLIGATORY,
+  p_curr  TYPE waers DEFAULT 'INR',
+  p_appr  TYPE syuname OBLIGATORY.
+
+DATA:
+  ls_header TYPE zpr_header,
+  ls_item   TYPE zpr_items,
+  lv_matnr  TYPE matnr,
+  lv_exists TYPE char10.
+
+START-OF-SELECTION.
+
+  IF p_qty <= 0 OR p_price <= 0.
+    MESSAGE 'Quantity and price must be positive'
+      TYPE 'E'.
+  ENDIF.
+
+  SELECT SINGLE request_id
+    FROM zpr_header
+    WHERE request_id = @p_reqid
+    INTO @lv_exists.
+
+  IF sy-subrc = 0.
+    MESSAGE 'Request ID already exists' TYPE 'E'.
+  ENDIF.
+
+  lv_matnr = p_matnr.
+
+  CALL FUNCTION 'CONVERSION_EXIT_MATN1_INPUT'
+    EXPORTING
+      input  = lv_matnr
+    IMPORTING
+      output = lv_matnr.
+
+  SELECT SINGLE matnr
+    FROM mara
+    WHERE matnr = @lv_matnr
+    INTO @DATA(lv_valid_matnr).
+
+  IF sy-subrc <> 0.
+    MESSAGE 'Material does not exist' TYPE 'E'.
+  ENDIF.
+
+  SELECT SINGLE werks
+    FROM t001w
+    WHERE werks = @p_werks
+    INTO @DATA(lv_plant).
+
+  IF sy-subrc <> 0.
+    MESSAGE 'Plant does not exist' TYPE 'E'.
+  ENDIF.
+
+  CLEAR ls_header.
+  ls_header-mandt        = sy-mandt.
+  ls_header-request_id   = p_reqid.
+  ls_header-created_by   = sy-uname.
+  ls_header-created_on   = sy-datum.
+  ls_header-status       = 'PENDING'.
+  ls_header-approver     = p_appr.
+  ls_header-currency     = p_curr.
+  ls_header-total_amount = p_qty * p_price.
+
+  CLEAR ls_item.
+  ls_item-mandt      = sy-mandt.
+  ls_item-request_id = p_reqid.
+  ls_item-item_no    = '00010'.
+  ls_item-matnr      = lv_matnr.
+  ls_item-quantity   = p_qty.
+  ls_item-unit       = p_unit.
+  ls_item-price      = p_price.
+  ls_item-currency   = p_curr.
+  ls_item-plant      = p_werks.
+
+  INSERT zpr_header FROM @ls_header.
+
+  IF sy-subrc <> 0.
+    ROLLBACK WORK.
+    MESSAGE 'Header creation failed' TYPE 'E'.
+  ENDIF.
+
+  INSERT zpr_items FROM @ls_item.
+
+  IF sy-subrc <> 0.
+    ROLLBACK WORK.
+    MESSAGE 'Item creation failed' TYPE 'E'.
+  ENDIF.
+
+  COMMIT WORK AND WAIT.
+
+  WRITE: / 'Request created:', p_reqid,
+         / 'Status:', ls_header-status,
+         / 'Total:', ls_header-total_amount,
+         / 'Currency:', p_curr.
